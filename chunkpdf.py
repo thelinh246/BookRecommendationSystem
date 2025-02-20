@@ -4,11 +4,8 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
+from macro import PDF_FOLDER, CHROMA_DB_PATH, MODEL_NAME
 
-# ========== CONFIGURATION ==========
-PDF_FOLDER = "pdf"
-CHROMA_DB_PATH = "vectordb"
-MODEL_NAME = "intfloat/multilingual-e5-large"
 
 # ========== STEP 1: LOAD PDF FILES ==========
 def load_pdf_files(folder_path):
@@ -33,17 +30,17 @@ def embed_and_store(chunks, db_path, model_name):
     embeddings = HuggingFaceEmbeddings(model_name=model_name)
     db = Chroma.from_documents(chunks, embeddings, persist_directory=db_path)
     db.persist()
-    print("✅ VectorDB đã lưu thành công tại:", db_path)
+    print("✅ VectorDB successfully saved at:", db_path)
 
 # ========== MAIN PIPELINE ==========
 def main():
-    print("📂 Đang tải các file PDF...")
+    print("📂 Loading PDF files...")
     documents = load_pdf_files(PDF_FOLDER)
     
-    print("✂️ Đang chunking văn bản với ColQwen2...")
+    print("✂️ Chunking text...")
     chunks = split_documents(documents)
     
-    print("🧠 Đang vector hóa và lưu trữ vào Chroma...")
+    print("🧠 Vectorizing and storing into ChromaDB...")
     embed_and_store(chunks, CHROMA_DB_PATH, MODEL_NAME)
 
 if __name__ == "__main__":
