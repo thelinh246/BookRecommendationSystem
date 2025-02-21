@@ -1,15 +1,5 @@
 """
-PDF Processing Pipeline using LangChain and ChromaDB
-
-This script performs the following steps:
-1. Load PDF files from a specified folder.
-2. Split the text content into smaller chunks.
-3. Embed and store these chunks into a Chroma vector database.
-
-Libraries used:
-- LangChain for document loading, text splitting, and vector storage.
-- HuggingFace for embedding generation.
-- ChromaDB for vector database storage.
+2/21/2025
 """
 
 import os

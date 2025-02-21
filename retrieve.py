@@ -1,13 +1,5 @@
 """
-Retrieve Information from ChromaDB
-
-This script retrieves relevant information from a Chroma vector database based on a user's query.
-
-Workflow:
-1. Load the embedding model using HuggingFaceEmbeddings.
-2. Load the Chroma vector database from a specified path.
-3. Retrieve the top-k most similar results using similarity search.
-4. Display the retrieved results, including metadata and content.
+2/21/2025
 """
 
 from langchain_community.vectorstores import Chroma
