@@ -2,3 +2,5 @@ langchain==0.3.19
 langchain_community==0.3.18
 langchain_huggingface==0.1.2
 transformers==4.49.0
+chromadb==0.6.3
+pypdf=5.3.0
