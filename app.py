@@ -1,16 +1,16 @@
-"""
-2/27/2024
-"""
-
 import os
 import json
 import uuid
 import streamlit as st
 from dotenv import load_dotenv
-import openai
+from typing import TypedDict, Annotated
+from langchain_openai import ChatOpenAI
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.tools import DuckDuckGoSearchResults
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain.prompts import PromptTemplate
+from langchain.chains import RetrievalQA
+from langgraph.graph import StateGraph, END
 import redis
 from macro import CHROMA_DB_PATH, MODEL_NAME
 
@@ -29,96 +29,112 @@ redis_client = redis.StrictRedis(
     decode_responses=True
 )
 
-# Agent class with specified pipeline
-class ChatbotAgent:
-    """
-        Agent to process user queries with keyword extraction and domain-specific responses.
-    """
-    def __init__(self):
-        self.search_tool = DuckDuckGoSearchResults()
-        self.client = openai.Client(api_key=OPENAI_API_KEY)
+# Define the state for the LangGraph workflow
+class ChatbotState(TypedDict):
+    query: str
+    keywords: str
+    domain: str
+    response: str
 
-    def extract_keywords(self, prompt):
-        """Extract main keywords from the user prompt using OpenAI.
-        """
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": f"Trích xuất từ khóa chính từ văn bản sau (danh sách ngắn gọn): '{prompt}'"}],
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
+# Initialize shared components
+llm = ChatOpenAI(model="gpt-4", temperature=0.7, api_key=OPENAI_API_KEY)
+search_tool = DuckDuckGoSearchRun()
+embeddings = HuggingFaceEmbeddings(model_name=MODEL_NAME)
+vector_store = Chroma(persist_directory=CHROMA_DB_PATH, embedding_function=embeddings)
 
-    def classify_domain(self, prompt):
-        """"Classify the domain of the user prompt
-        """
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": f"Xác định lĩnh vực của câu hỏi sau: '{prompt}' (ví dụ: Kinh tế, Toán học, hoặc Khác)"}],
-            temperature=0
-        )
-        return response.choices[0].message.content.strip()
+# Define nodes for the LangGraph workflow
+def extract_keywords(state: ChatbotState) -> ChatbotState:
+    keyword_prompt = PromptTemplate(
+        input_variables=["query"],
+        template="Extract the main keywords from this text (short list): '{query}'"
+    )
+    keyword_chain = keyword_prompt | llm
+    keywords = keyword_chain.invoke({"query": state["query"]}).content.strip()
+    return {"query": state["query"], "keywords": keywords, "domain": state.get("domain", ""), "response": state.get("response", "")}
 
-    def retrieve_from_db(self, query, db_path, model_name, top_k=5):
-        """Retrieve relevant documents from the vector database
-        """
-        embeddings = HuggingFaceEmbeddings(model_name=model_name)
-        db = Chroma(persist_directory=db_path, embedding_function=embeddings)
-        return db.similarity_search(query, k=top_k)
+def classify_domain(state: ChatbotState) -> ChatbotState:
+    domain_prompt = PromptTemplate(
+        input_variables=["query"],
+        template="Classify the domain of this question: '{query}' (e.g., Economics, Mathematics, or Other)"
+    )
+    domain_chain = domain_prompt | llm
+    domain = domain_chain.invoke({"query": state["query"]}).content.strip()
+    return {"query": state["query"], "keywords": state["keywords"], "domain": domain, "response": state.get("response", "")}
 
-    def generate_response(self, prompt):
-        """Generate a response to the user query using OpenAI
-        """
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
-        )
-        return response.choices[0].message.content.strip()
+def process_general_query(state: ChatbotState) -> ChatbotState:
+    search_results = search_tool.run(state["query"])
+    response_prompt = PromptTemplate(
+        input_variables=["query", "results"],
+        template="Answer the query based on the following search results and use following language: '{query}'\n\n{results}"
+    )
+    response_chain = response_prompt | llm
+    response = response_chain.invoke({"query": state["query"], "results": search_results}).content.strip()
+    return {"query": state["query"], "keywords": state["keywords"], "domain": state["domain"], "response": response}
 
-    def process_query(self, user_input, db_path=CHROMA_DB_PATH, model_name=MODEL_NAME):
-        """Process user query by extracting keywords and generating a domain-specific response
-        """
-    # Step 1: Extract keywords from user prompt
-        keywords = self.extract_keywords(user_input)
-        
-        # Step 2: Analyze the domain/topic
-        domain = self.classify_domain(user_input)
-        
-        # Step 3: Process based on domain
-        if domain not in ["Kinh tế", "Toán học"]:
-            search_results = self.search_tool.run(user_input)
-            prompt = f"Answer the query based on the following search results: '{user_input}'\n\n{search_results}"
-            response = self.generate_response(prompt)
-        else:
-            # Combine user_input and keywords for a more focused query
-            enhanced_query = f"{user_input}"
-            results = self.retrieve_from_db(enhanced_query, db_path, model_name)
-            combined_content = "\n\n".join([result.page_content for result in results]) if results else "No relevant data found in vector database."
-            prompt = f"Based on the following documents, answer the query: '{user_input}'\n\n{combined_content}"
-            response = self.generate_response(prompt)
-        
-        return {"keywords": keywords, "response": response}
+def process_specialized_query(state: ChatbotState) -> ChatbotState:
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=vector_store.as_retriever(search_kwargs={"k": 5}),
+        return_source_documents=False
+    )
+    response = qa_chain.run(state["query"])
+    return {"query": state["query"], "keywords": state["keywords"], "domain": state["domain"], "response": response}
+
+# Define the LangGraph workflow
+workflow = StateGraph(ChatbotState)
+
+# Add nodes
+workflow.add_node("extract_keywords", extract_keywords)
+workflow.add_node("classify_domain", classify_domain)
+workflow.add_node("process_general_query", process_general_query)
+workflow.add_node("process_specialized_query", process_specialized_query)
+
+# Define edges
+workflow.set_entry_point("extract_keywords")
+workflow.add_edge("extract_keywords", "classify_domain")
+
+# Conditional edge based on domain
+def route_domain(state: ChatbotState) -> str:
+    if state["domain"] in ["Economics", "Mathematics"]:
+        return "process_specialized_query"
+    return "process_general_query"
+
+workflow.add_conditional_edges(
+    "classify_domain",
+    route_domain,
+    {
+        "process_general_query": "process_general_query",
+        "process_specialized_query": "process_specialized_query"
+    }
+)
+
+workflow.add_edge("process_general_query", END)
+workflow.add_edge("process_specialized_query", END)
+
+# Compile the graph
+graph = workflow.compile()
+
+# Function to process user input using the graph
+def process_query(user_input: str) -> dict:
+    initial_state = {"query": user_input, "keywords": "", "domain": "", "response": ""}
+    result = graph.invoke(initial_state)
+    return {"keywords": result["keywords"], "response": result["response"]}
 
 # Save conversation to Redis
 def save_conversation(session_id, messages):
-    """Save the conversation to Redis with a title and message history
-    """
     title = messages[0]['content'] if messages else "Untitled Session"
     redis_client.set(session_id, json.dumps({"title": title, "messages": messages}))
     redis_client.zadd("session_order", {session_id: int(uuid.uuid4().int % 1e9)})
 
 # Load conversation from Redis
 def load_conversation(session_id):
-    """Load a conversation from Redis by session ID
-    """
     data = redis_client.get(session_id)
-    redis_client.zadd("session_order", {session_id: int(uuid.uuid4().int % 1e9)})  # Update last used
+    redis_client.zadd("session_order", {session_id: int(uuid.uuid4().int % 1e9)})
     return json.loads(data)["messages"] if data else []
 
 # Delete conversation from Redis
 def delete_conversation(session_id):
-    """Delete a conversation from Redis and update session state
-    """
     redis_client.delete(session_id)
     redis_client.zrem("session_order", session_id)
     if "session_id" in st.session_state and st.session_state.session_id == session_id:
@@ -128,10 +144,9 @@ def delete_conversation(session_id):
 
 # Get all sessions sorted by last used
 def get_all_sessions():
-    """Retrieve all sessions from Redis sorted by last used
-    """
     session_ids = redis_client.zrevrange("session_order", 0, -1)
-    return [{"id": session_id, "title": json.loads(redis_client.get(session_id)).get("title", "Untitled Session")} for session_id in session_ids]
+    return [{"id": session_id, "title": json.loads(redis_client.get(session_id)).get("title", "Untitled Session")}
+            for session_id in session_ids]
 
 # Streamlit configuration
 st.set_page_config(page_title="Chatbot", page_icon="🤖", layout="centered")
@@ -162,17 +177,14 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Initialize the agent
-agent = ChatbotAgent()
-
 user_input = st.chat_input("Enter your question...")
 
 if user_input:
     st.chat_message("user").markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # Process query using the agent
-    result = agent.process_query(user_input)
+    # Process query using the LangGraph workflow
+    result = process_query(user_input)
 
     # Format and display the response
     response_text = f"**Keywords**: {result['keywords']}\n\n**Response**: {result['response']}"

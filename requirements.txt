@@ -1,7 +1,14 @@
 langchain==0.3.19
+langchain_chroma==0.2.2
 langchain_community==0.3.18
 langchain_huggingface==0.1.2
+langchain_openai==0.3.7
+langgraph==0.3.1
+openai==1.64.0
+python-dotenv==1.0.1
+redis==5.2.1
+streamlit==1.42.2
+duckduckgo_search==7.5.0
 transformers==4.49.0
 chromadb==0.6.3
 pypdf==5.3.0
-redis==5.1.2
