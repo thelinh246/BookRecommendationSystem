@@ -7,7 +7,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from macro import CHROMA_DB_PATH, MODEL_NAME
 
 # ========== RETRIEVE FROM VECTORDB ==========
-def retrieve_from_db(query, db_path, model_name, top_k=1):
+def retrieve_from_db(query, db_path, model_name, top_k=5):
     """Retrieves relevant documents from a Chroma vector database using similarity search.
 
     Args:
@@ -30,7 +30,7 @@ def retrieve_from_db(query, db_path, model_name, top_k=1):
 # ========== MAIN ==========
 if __name__ == "__main__":
     # Receive prompt from users
-    query = "Kinh tế học là gì?" 
+    query = "Phương trình vi phân cấp 1 dạng tách biến" 
     # Retrieve
     print("⚡ Retrieving data from VectorDB...")
     results = retrieve_from_db(query, CHROMA_DB_PATH, MODEL_NAME)
